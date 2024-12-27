@@ -1,0 +1,197 @@
+services:
+  setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    container_name: setup
+    user: "0"
+    command: >
+      bash -c '
+        if [ x${ELASTIC_PASSWORD} == x ]; then
+          echo "Set the ELASTIC_PASSWORD environment variable in the .env file";
+          exit 1;
+        elif [ x${KIBANA_PASSWORD} == x ]; then
+          echo "Set the KIBANA_PASSWORD environment variable in the .env file";
+          exit 1;
+        fi;
+        echo "Waiting for Elasticsearch availability";
+        until curl -s http://es01:9200 | grep -q "missing authentication credentials"; do sleep 30; done;
+        echo "Setting kibana_system password";
+        until curl -s -X POST -u "elastic:${ELASTIC_PASSWORD}" -H "Content-Type: application/json" http://es01:9200/_security/user/kibana_system/_password -d "{\"password\":\"${KIBANA_PASSWORD}\"}" | grep -q "^{}"; do sleep 10; done;
+        echo "All done!";
+      '
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://es01:9200 | grep -q 'missing authentication credentials'"]
+      interval: 10s
+      timeout: 5s
+      retries: 120
+
+  es01:
+    depends_on:
+      setup:
+        condition: service_healthy
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    container_name: elastic
+    environment:
+      - node.name=es01
+      - cluster.name=${CLUSTER_NAME}
+      - discovery.type=single-node
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - bootstrap.memory_lock=true
+    mem_limit: ${MEM_LIMIT}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - ./elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+      - ./elastic_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s http://localhost:9200 | grep -q 'missing authentication credentials'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  kibana:
+    depends_on:
+      es01:
+        condition: service_healthy
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+    container_name: kibana
+    environment:
+      - SERVERNAME=kibana
+      - ELASTICSEARCH_HOSTS=http://es01:9200
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=${ELASTIC_PASSWORD}
+      - SERVER_BASEPATH=/kibana
+      - SERVER_REWRITEBASEPATH=true
+      - xpack.encryptedSavedObjects.encryptionKey=2ff9be40b3562fdb2be738a4fa70d07469bd736c5a5a5909075e57330dc1909a
+      - migrations.discardCorruptObjects="8.11.2"
+    mem_limit: ${MEM_LIMIT}
+    volumes:
+      - ./kibanadata:/usr/share/kibana/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s -I http://localhost:5601 | grep -q 'HTTP/1.1 302 Found'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+
+  # nginx:
+  #   image: nginx
+  #   container_name: nginx
+  #   volumes:
+  #     - ./nginx.conf.d:/etc/nginx/conf.d
+  #     # Without SSL
+  #     # - ./nginxCustomnonSsl.conf:/etc/nginx/conf.d/default.conf
+  #     # With SSL
+  #     # - ./nginxCustomSsl.conf:/etc/nginx/conf.d/default.conf
+  #     # - ./certs/certs1.pem:/etc/nginx/cert1.pem
+  #     # - ./certs/privkey1.pem:/etc/nginx/privkey1.pem
+  #   ports:
+  #     # Without SSL
+  #     - 80:80
+  #     # With SSL
+  #     # - 443:443
+  #     # - 8901:8901
+
+  # datav-core:
+  #   image: ${DATAV_CORE_URL}
+  #   container_name: datav-core
+  #   volumes:
+  #     - ./demologs/:/app/logs/
+  #   environment:
+  #     - MONGO_URL=${MONGO_URL}
+  #     - MONGO_DATABASE=${MONGO_DATABASE}
+  #     - ELASTIC_URL=${ELASTIC_URL}
+  #     - ELASTIC_USERNAME=${ELASTIC_USERNAME}
+  #     - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+  #     - KIBANA_URL=${KIBANA_URL}
+  #     - SESSION_APPLY=${SESSION_APPLY}
+  #     - AUTHJWT_SECRET_KEY=${AUTHJWT_SECRET_KEY}
+  #     - EXTERNAL_SERVICE_BASE_URL=${EXTERNAL_SERVICE_BASE_URL}
+  #     - ML_BASE_URL=${ML_BASE_URL}
+  #     - JWT_REFRESH_SECRET_KEY=${JWT_REFRESH_SECRET_KEY}
+  #     - API_KEY=${API_KEY}
+  #   ulimits:
+  #     memlock:
+  #       soft: -1
+  #       hard: -1
+
+  # datav-connector:
+  #   image: ${DATAV_CONNECTOR_URL}
+  #   container_name: datav-connector
+  #   volumes:
+  #     - ./demologs/:/app/logs/
+  #   environment:
+  #     - MONGO_URL=${MONGO_URL}
+  #     - MONGO_DATABASE=${MONGO_DATABASE}
+  #     - ELASTIC_URL=${ELASTIC_URL}
+  #     - ELASTIC_USERNAME=${ELASTIC_USERNAME}
+  #     - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+  #     - KIBANA_URL=${KIBANA_URL}
+  #     - SESSION_APPLY=${SESSION_APPLY}
+  #     - CLIENT_API_KEY=${CLIENT_API_KEY}
+  #     - DATAV_REPORT_URL={DATAV_REPORT_URL}
+  #     - DATAV_REPORT_USERNAME=${DATAV_REPORT_USERNAME}
+  #     - DATAV_REPORT_PASSWORD=${DATAV_REPORT_PASSWORD}
+  #   ulimits:
+  #     memlock:
+  #       soft: -1
+  #       hard: -1
+
+  # datav-prediction:
+  #   image: ${DATAV_PREDICTION_URL}
+  #   container_name: datav-prediction
+  #   volumes:
+  #     - ./logs/:/app/logs/
+  #   environment:
+  #     - MONGO_URL=${MONGO_URL}
+  #     - MONGO_DATABASE=${PREDICTION_MONGO_DATABASE}
+  #     - ELASTIC_URL=${ELASTIC_URL}
+  #     - ELASTIC_USERNAME=${ELASTIC_USERNAME}
+  #     - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+  #   ports:
+  #     - 8000:8000
+
+
+
+  # datavui:
+  #   image: ${DATAVUI_URL}
+  #   container_name: datavui
+
+
+  # mongodo:
+  #   image: mongo
+  #   container_name: mongodb
+  #   ports:
+  #     - 27017:27017
+  #   volumes:
+  #     - ./mongo-data:/data/db
+  #     - ./data:/tmp/data
+  #   environment:
+  #     - MONGO_INITDB_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME}
+  #     - MONGO_INITDB_ROOT_PASSWORD=${MONGO_INITDB_ROOT_PASSWORD}
+
+ # mongo-express:
+ #   image: mongo-express
+ #   environment:
+ #     - ME_CONFIG_MONGODB_ADMINUSERNAME=mongo
+ #     - ME_CONFIG_MONGODB_ADMINPASSWORD=DataVMongo23
+ #     - ME_CONFIG_MONGODB_SERVER=mongodb
+ #     - ME_CONFIG_MONGODB_ENABLE_ADMIN=true
+ #   container_name: mongoexpress
+
+# volumes:
+#   certs:
+#     driver: local
+#   esdata01:
+#     driver: local
+#   kibanadata:
+#     driver: local
